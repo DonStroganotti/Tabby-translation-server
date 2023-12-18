@@ -1,13 +1,27 @@
 import json
+import re
+import sys
 from flask import Flask, request
 import asyncio
 import requests
+from pymongo import MongoClient, errors
+
+
+RUN_WITH_DATABASE = True
+
+if RUN_WITH_DATABASE == True:
+    ## connect to mongodb ##
+    try:
+        client = MongoClient("localhost", 6040)
+    except errors.ServerSelectionTimeoutError as err:
+        print("pymongo ERROR:", err)
+
+    db = client["TSS-database"]
 
 app = Flask(__name__)
 
 global last_id
 last_id = 0
-
 
 @app.route("/v1/health", methods=["GET"])
 async def health():
@@ -38,7 +52,7 @@ def send_completion_request(text=""):
             "prompt": "{}".format(text),
             "max_tokens": 50,
             "temperature": 0.7,
-            "top_p": 0.1,
+            "top_p": 0.2,
         }
 
         return send_request("127.0.0.1", 5000, config)
@@ -49,23 +63,54 @@ def send_request(ip, port, config):
     url = f"http://{ip}:{port}/v1/completions"
     headers = {"Content-Type": "application/json"}
     try:
-        response = requests.post(url, headers=headers, data=json.dumps(config))
+        response = requests.post(url, headers=headers, data=json.dumps(config)) 
 
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException:
         return None
 
+# collection from mongodb
+def query_database(search_string, collection):
+    print("QUERY: ", search_string)
+    query = {"name": {"$regex": f"{search_string}", "$options": "i"}}
+    return collection.find(query).limit(10) 
 
-def get_extra_context(prefix):
-    # get full file context up till the prefix
-    with open("file.py", "r") as file:
-        # read entire file into a string
-        file_contents = file.read()
-        return file_contents
+def repl(m):
+    return "\\"+m[0]
 
+def escape_special_chars(s):
+    return re.sub("[^a-zA-Z0-9]", repl, s)
 
-async def delayed_response(delay, id, prefix):
+def replace_special_chars(s):
+    return re.sub("[^a-zA-Z0-9_]", " ", s)
+
+def get_extra_context(prefix, language):
+    # based on the last line in the prefix, split into space separated tokens and get database result from those
+    prefix_lines = prefix.splitlines()
+    prefix_lines = [s for s in prefix_lines if s.replace(" ","")]
+    # replace non valid variable name tokens with spaces
+    tokens = replace_special_chars(prefix_lines[-1])
+    # split string into multiple tokens to search for 
+    tokens = tokens.strip().split(" ")
+    # only consider tokens that are at least 3 in length
+    tokens = [t for t in tokens if len(t) >= 3] 
+    additional_context = []      
+    for token in tokens:    
+        # get collection from language
+        results = query_database(f"{token}", db[language])       
+        for result in results:
+            result_name = result['name']
+            print("QUERY RESULT: ", result_name)
+            result_txt = result['full'] 
+            # add in line comment at the start of all lines
+            for line in result_txt.split("\n"):
+                additional_context.append("# "+line) 
+
+    # return as a single string
+    return "\n".join(additional_context) 
+
+async def delayed_response(delay, id, prefix, language): 
     global last_id
     returnObj = {
         "id": "",
@@ -75,7 +120,11 @@ async def delayed_response(delay, id, prefix):
     await asyncio.sleep(delay / 1000)
     # if the id matches the last received request only then will a request be made to the LLM server
     if id >= last_id:
-        context = ""  # get_extra_context(prefix)
+        if RUN_WITH_DATABASE == True:
+            context = get_extra_context(prefix, language)
+        else:
+            context = ""
+        #print("EXTRA CONTEXT:\n", context) 
 
         response = send_completion_request(context + prefix)
         if response is not None:
@@ -104,7 +153,7 @@ async def completions():
 
     # By delaying the responses the function has time internally to prevent sending older messages
     # while the user is still typing
-    response = await delayed_response(250, last_id, prefix)
+    response = await delayed_response(250, last_id, prefix, language)
     return response, 200
 
 
