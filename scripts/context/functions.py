@@ -18,29 +18,6 @@ CSS_LANGUAGE = Language(
 parser = Parser()
 
 
-class FunctionDefinition:
-    def __init__(self, config):
-        self.name = config.get("name", "")
-        self.parameters = config.get("parameters", "")
-        self.body = config.get("body", "")
-        self.full = config.get("full", "")
-        self.children = config.get("children", "")
-
-
-class CallDefinition:
-    def __init__(self, config):
-        self.name = config.get("name", "")
-        self.arguments = config.get("arguments", "")
-        self.assignments = config.get("assignments", "")
-        self.full = config.get("full", "")
-
-
-class AssignmentDefinition:
-    def __init__(self, config):
-        self.name = config.get("name", "")
-        self.full = config.get("full", "")
-
-
 def get_language(language):
     if language == "python":
         return PY_LANGUAGE
@@ -95,13 +72,16 @@ def get_specific_parent(start_node, type_name):
     return None
 
 
-def get_calls(text, language) -> [CallDefinition]:
+def get_calls(file_data, language):
+    file_path = file_data["path"]
+    file_text = file_data["content"]
+
     fn_def_query = """
     (call function: (identifier) @function_call 
     )
     """
 
-    call_captures, tree = captures_query_root(text, fn_def_query, language)
+    call_captures, tree = captures_query_root(file_text, fn_def_query, language)
 
     assignment_query = "(assignment left: (identifier) @assignment)"
 
@@ -114,12 +94,12 @@ def get_calls(text, language) -> [CallDefinition]:
         parent = call[0].parent
 
         # function name
-        fn_name = extract_text(text, call[0])
+        fn_name = extract_text(file_text, call[0])
         # get arguments from function
         arg_capture = captures_query_node(arguments_query, language, parent)
         arguments = []
         for arg in arg_capture:
-            arguments.append(extract_text(text, arg[0]))
+            arguments.append(extract_text(file_text, arg[0]))
 
         # print(arguments)
         # if there are arguments, find a function definition as parent
@@ -134,26 +114,23 @@ def get_calls(text, language) -> [CallDefinition]:
                     assignment_query, language, fn_def_node
                 )
                 for assignment in assignment_captures:
-                    assignment_name = extract_text(text, assignment[0])
+                    assignment_name = extract_text(file_text, assignment[0])
                     # only store assignments of variables used in function call
                     if assignment_name in arguments:
                         assignments.append(
-                            AssignmentDefinition(
-                                {
-                                    "name": assignment_name,
-                                    "full": extract_text(text, assignment[0].parent),
-                                }
-                            )
+                            {
+                                "name": assignment_name,
+                                "full": extract_text(file_text, assignment[0].parent),
+                            }
                         )
         calls.append(
-            CallDefinition(
-                {
-                    "name": fn_name,
-                    "full": extract_text(text, parent),
-                    "arguments": arguments,
-                    "assignments": assignments,
-                }
-            )
+            {
+                "name": fn_name,
+                "full": extract_text(file_text, parent),
+                "arguments": arguments,
+                "assignments": assignments,
+                "path": file_path,
+            }
         )
         # print(calls[-1].full)
         # print(calls[-1].arguments)
@@ -162,7 +139,10 @@ def get_calls(text, language) -> [CallDefinition]:
     return calls
 
 
-def get_functions(text, language) -> [FunctionDefinition]:
+def get_functions(file_data, language):
+    file_path = file_data["path"]
+    file_text = file_data["content"]
+
     fn_def_query = """
     (function_definition name: (identifier) @function-name
     parameters: (parameters) @function-parameters
@@ -170,7 +150,7 @@ def get_functions(text, language) -> [FunctionDefinition]:
     )
     """
 
-    function_definitions, tree = captures_query_root(text, fn_def_query, language)
+    function_definitions, tree = captures_query_root(file_text, fn_def_query, language)
 
     # query to get function calls
     fn_call_query = """
@@ -186,15 +166,14 @@ def get_functions(text, language) -> [FunctionDefinition]:
         function_parameters = function_definitions[i + 1][0]
         function_body = function_definitions[i + 2][0]
 
-        fn_def = FunctionDefinition(
-            {
-                "name": extract_text(text, function_name),
-                "parameters": extract_text(text, function_parameters),
-                "body": extract_text(text, function_body),
-                "full": text[function_name.start_byte : function_body.end_byte],
-                "children": [],
-            }
-        )
+        fn_def = {
+            "name": extract_text(file_text, function_name),
+            "parameters": extract_text(file_text, function_parameters),
+            "body": extract_text(file_text, function_body),
+            "full": file_text[function_name.start_byte : function_body.end_byte],
+            "path": file_path,
+            "children": [],
+        }
 
         # get function calls querying children of the function
         function_calls = captures_query_node(fn_call_query, language, parent)
@@ -202,12 +181,12 @@ def get_functions(text, language) -> [FunctionDefinition]:
             call_name = function_calls[j][0]
             call_arguments = function_calls[j + 1][0]
 
-            fn_def.children.append(
+            fn_def["children"].append(
                 {
                     "type": "fn_def_call",
-                    "name": extract_text(text, call_name),
-                    "arguments": extract_text(text, call_arguments),
-                    "full": text[call_name.start_byte : call_arguments.end_byte],
+                    "name": extract_text(file_text, call_name),
+                    "arguments": extract_text(file_text, call_arguments),
+                    "full": file_text[call_name.start_byte : call_arguments.end_byte],
                 }
             )
             # print(text[fn_call.start_byte : fn_call.end_byte])
@@ -219,8 +198,11 @@ def get_functions(text, language) -> [FunctionDefinition]:
     return functions
 
 
-def get_top_level_assignments(text, language) -> [AssignmentDefinition]:
-    tree = parse_text(text, language)
+def get_top_level_assignments(file_data, language):
+    file_path = file_data["path"]
+    file_text = file_data["content"]
+
+    tree = parse_text(file_text, language)
     query = get_language(language).query(
         """
     (   
@@ -237,40 +219,78 @@ def get_top_level_assignments(text, language) -> [AssignmentDefinition]:
             if name:
                 name = name[0][0]
                 # get the name
-                name = text[name.start_byte : name.end_byte]
-                full = text[child.start_byte : child.end_byte]
-                a_def = AssignmentDefinition({"name": name, "full": full})
+                name = file_text[name.start_byte : name.end_byte]
+                full = file_text[child.start_byte : child.end_byte]
+                a_def = {"name": name, "full": full, "path": file_path}
                 assignments.append(a_def)
     return assignments
 
 
-def read_files(directory, file_ext):
-    py_files = glob.glob(os.path.join(directory, f"*{file_ext}"))
-    file_contents = {}
-    for file in py_files:
+# delete information about file from database
+def delete_file_info(file_path, collection):
+    query = {"path": f"{file_path}"}
+    # remove all elements with the path from collection
+    collection.delete_many(query)
+
+
+# get unique directories from a list of file paths
+def extract_directories(file_paths):
+    return list(set(os.path.dirname(file) for file in file_paths))
+
+
+# get files from a directory
+def get_files_from_directory(directory, file_ext, recursive=False):
+    if recursive:
+        search_path = os.path.join(directory, f"**/*{file_ext}")
+    else:
+        search_path = os.path.join(directory, f"*{file_ext}")
+
+    files = glob.glob(search_path, recursive=recursive)
+    return files
+
+
+def read_files_from_directory(directory, file_ext, recursive=False):
+    files = get_files_from_directory(directory, file_ext, recursive)
+    file_contents = []
+    for file in files:
         with open(file, "r") as f:
-            file_contents[file] = f.read()
+            file_contents.append({"path": file, "content": f.read()})
     return file_contents
 
 
-def extract_language_file_data(directory, file_ext, language):
-    file_contents = read_files(directory, file_ext)
+# {"path": file, "content": f.read()}
+def extract_language_file_data(file_contents, language):
+    assignments = []
+    functions = []
+    calls = []
+
+    # get assignments
+    for _data in get_top_level_assignments(file_contents, language):
+        assignments.append(_data)
+    # get functions
+    for _data in get_functions(file_contents, language):
+        functions.append(_data)
+    # get calls
+    for _data in get_calls(file_contents, language):
+        calls.append(_data)
+
+    return assignments, functions, calls
+
+
+def extract_language_file_data_from_repository(repository_info, file_ext, language):
+    path = repository_info["path"]
+    recursive = repository_info["recursive_search"]
+    file_contents = read_files_from_directory(path, file_ext, recursive)
 
     assignments = []
     functions = []
     calls = []
 
     for file in file_contents:
-        file_data = file_contents[file]
-        # get assignments
-        for _data in get_top_level_assignments(file_data, language):
-            assignments.append(_data)
-        # get functions
-        for _data in get_functions(file_data, language):
-            functions.append(_data)
-        # get calls
-        for _data in get_calls(file_data, language):
-            calls.append(_data)
+        _assignments, _functions, _calls = extract_language_file_data(file, language)
+        assignments += _assignments
+        functions += _functions
+        calls += _calls
     return assignments, functions, calls
 
 
@@ -278,24 +298,33 @@ def extract_language_file_data(directory, file_ext, language):
 def insert_language_data_into_database(assignments, functions, calls, collection):
     # variable assignments at top level of a document
     for data in assignments:
-        post = {"name": data.name, "type": "assignment", "full": data.full}
+        post = {
+            "name": data["name"],
+            "type": "assignment",
+            "full": data["full"],
+            "path": data["path"],
+        }
         collection.insert_one(post)
     # function declarations
     for data in functions:
         post = {
-            "name": data.name,
+            "name": data["name"],
             "type": "function_definition",
-            "full": data.full,
-            "children": data.children,
+            "full": data["full"],
+            "children": data["children"],
+            "path": data["path"],
         }
         collection.insert_one(post)
     # calls
     for data in calls:
         post = {
-            "name": data.name,
+            "name": data["name"],
             "type": "call",
-            "full": data.full,
-            "arguments": data.arguments,
-            "assignments": [{"name": a.name, "full": a.full} for a in data.assignments],
+            "full": data["full"],
+            "arguments": data["arguments"],
+            "path": data["path"],
+            "assignments": [
+                {"name": a["name"], "full": a["full"]} for a in data["assignments"]
+            ],
         }
         collection.insert_one(post)

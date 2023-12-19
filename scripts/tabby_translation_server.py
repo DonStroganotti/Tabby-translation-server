@@ -7,7 +7,7 @@ import requests
 from pymongo import MongoClient, errors
 
 RUN_WITH_DATABASE = True
-VERBOSE = True
+VERBOSE = False
 
 if RUN_WITH_DATABASE == True:
     ## connect to mongodb ##

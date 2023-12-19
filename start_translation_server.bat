@@ -1,0 +1,1 @@
+python "scripts/tabby_translation_server.py"
