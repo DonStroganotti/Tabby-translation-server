@@ -24,6 +24,13 @@ languages = [
 ]
 
 
+def get_ext_from_language(language):
+    for lang in languages:
+        if lang["name"] == language:
+            return lang["ext"]
+    return "unknown"
+
+
 def get_language_from_ext(file_ext):
     # find object that contains string in object
     for language in languages:

@@ -1,3 +1,4 @@
+import datetime
 from pymongo import MongoClient, errors
 from globals import *
 from functions import *
@@ -5,7 +6,7 @@ from file_monitoring import *
 import threading
 import time
 
-VERBOSE = False
+VERBOSE = True
 
 ## connect to mongodb ##
 try:
@@ -65,7 +66,11 @@ def update_context(file_path):
     language_name = get_language_from_ext(file_ext)
 
     with open(file_path, "r") as f:
-        print("Updating database info for file: ", file_path)
+        # get current timestamp as string
+        if VERBOSE:
+            timetamp = str(datetime.datetime.now())
+            timestamp_short = timetamp.split(".")[0]
+            print(f"[{timestamp_short}] Updated:", file_path)
         file_info = {"path": file_path, "content": f.read()}
         _a, _f, _calls = extract_language_file_data(file_info, language_name)
         # mongodb collection
@@ -77,28 +82,32 @@ def update_context(file_path):
 
 def file_modified(file_path):
     if not get_language_from_ext(get_ext_from_file_path(file_path)) == "unknown":
-        if VERBOSE:
-            print("modified: ", file_path)
         threading.Thread(target=update_context, args=(file_path,)).start()
 
 
 def file_created(file_path):
     if not get_language_from_ext(get_ext_from_file_path(file_path)) == "unknown":
         if VERBOSE:
-            print("created: ", file_path)
+            timetamp = str(datetime.datetime.now())
+            timestamp_short = timetamp.split(".")[0]
+            print(f"[{timestamp_short}] Created:", file_path)
         threading.Thread(target=update_context, args=(file_path,)).start()
 
 
 def file_deleted(file_path):
     file_ext = get_ext_from_file_path(file_path)
     language_name = get_language_from_ext(file_ext)
+
     if not language_name == "unknown":
         if VERBOSE:
-            print("deleted: ", file_path)
+            timetamp = str(datetime.datetime.now())
+            timestamp_short = timetamp.split(".")[0]
+            print(f"[{timestamp_short}] Deleted:", file_path)
         # get file extension from path
         collection = db[language_name]
         delete_file_info(file_path, collection)
 
 
 # start watching folders for changes
+print("Watching for file changes...")
 WatchRepositories(repository_paths, file_modified, file_created, file_deleted)
